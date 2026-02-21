@@ -1,50 +1,61 @@
-# Respond.io → Odoo Contact Sync Bridge
+# Respond.io → Odoo | Event-Driven ETL Pipeline
 
-Lean containerized Python bridge to sync Respond.io contacts into Odoo SaaS (OTCA) via webhook — powered by FastAPI, Celery, and XML-RPC.
+A lightweight, containerized **event-driven ETL pipeline** that captures real-time contact events from Respond.io, transforms and validates the data, then loads it into Odoo CRM via XML-RPC — ensuring data consistency through idempotent upsert operations.
 
-## Architecture
+## Pipeline Architecture
 
 ```
-Respond.io Webhook → FastAPI → Celery (Redis) → OdooClient (XML-RPC) → Odoo SaaS
+┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐     ┌───────────────┐
+│  Respond.io  │────▶│   FastAPI Ingest  │────▶│  Celery + Redis  │────▶│  Odoo CRM     │
+│  (Source)    │     │  (Extract/Valid.) │     │  (Queue/Buffer)  │     │  (Load/Sink)  │
+└─────────────┘     └──────────────────┘     └─────────────────┘     └───────────────┘
+     Event               Extract &                Transform &             Load
+    Trigger              Validate                  Enqueue              (Upsert)
 ```
 
-## Features
+## ETL Breakdown
 
-- **Webhook Receiver** — Accepts Respond.io contact payloads (flat, nested, or root-level)
-- **Pydantic Validation** — Strict schema validation with automatic integer-to-string ID coercion
-- **Celery Task Queue** — Async processing with auto-retry (3x, exponential backoff)
-- **Idempotent Upsert** — Deduplication via `x_studio_respondio_id` field in Odoo
-- **Phone Formatting** — Auto-normalizes phone numbers to E.164 format
-- **Health Check** — `/health` endpoint for Docker readiness probes
+| Stage | Description |
+|-------|-------------|
+| **Extract** | Webhook ingestion layer captures contact events from Respond.io in real-time |
+| **Transform** | Pydantic schema validation, phone normalization (E.164), name concatenation, ID type coercion |
+| **Load** | Idempotent upsert into Odoo `res.partner` model via XML-RPC, deduplicated by `x_studio_respondio_id` |
+
+## Key Data Engineering Patterns
+
+- **Event-Driven Ingestion** — Real-time webhook capture instead of batch polling
+- **Schema Validation** — Pydantic models enforce data contracts at ingestion boundary
+- **Async Task Queue** — Celery decouples ingestion from processing, preventing backpressure
+- **Idempotent Loads** — Upsert logic ensures exactly-once semantics for contact records
+- **Auto-Retry with Backoff** — Transient failures (network, timeout) retry 3x with exponential backoff
+- **Data Transformation** — Phone number normalization (E.164), flexible payload parsing (3 formats)
 
 ## Project Structure
 
 ```
 respondio_odoo/
 ├── app/
-│   ├── __init__.py        # Package marker
-│   ├── config.py          # pydantic-settings (env loading)
-│   ├── schemas.py         # Pydantic models for webhook payload
-│   ├── transform.py       # Phone → E.164 formatting
-│   ├── odoo_client.py     # Class-based XML-RPC client
-│   ├── tasks.py           # Celery tasks (auto-retry)
-│   └── main.py            # FastAPI entry point
-├── .env                   # Credentials (not tracked by git)
-├── .gitignore
+│   ├── config.py          # Centralized config via pydantic-settings
+│   ├── schemas.py         # Data contracts (Pydantic models)
+│   ├── transform.py       # Transformation layer (E.164 phone formatting)
+│   ├── odoo_client.py     # Load layer (XML-RPC client with idempotent upsert)
+│   ├── tasks.py           # Async orchestration (Celery tasks)
+│   └── main.py            # Ingestion layer (FastAPI webhook receiver)
+├── .env                   # Pipeline credentials (not tracked)
 ├── Dockerfile
 ├── docker-compose.yml
 └── requirements.txt
 ```
 
-## Setup
+## Quick Start
 
-1. **Clone the repo**
+1. **Clone**
    ```bash
    git clone git@github.com:zidanlf/respondio_to_odoo.git
    cd respondio_to_odoo
    ```
 
-2. **Create `.env`** file in the project root:
+2. **Configure credentials** — create `.env`:
    ```env
    ODOO_URL=https://otca.odoo.com
    ODOO_DB=otca
@@ -53,26 +64,17 @@ respondio_odoo/
    REDIS_URL=redis://redis:6379/0
    ```
 
-3. **Run with Docker Compose**
+3. **Deploy**
    ```bash
    docker-compose up --build -d
    ```
 
-4. **Verify**
+4. **Verify pipeline health**
    ```bash
    curl http://localhost:8000/health
    ```
 
-## Usage
-
-### Webhook Endpoint
-
-```
-POST /webhook
-Content-Type: application/json
-```
-
-### Sample Payload
+## Sample Event Payload
 
 ```json
 {
@@ -86,23 +88,15 @@ Content-Type: application/json
 }
 ```
 
-### Test
-
-```bash
-curl -X POST http://localhost:8000/webhook \
-     -H "Content-Type: application/json" \
-     -d '{"id":"test_001","firstName":"John","lastName":"Doe","phoneNumber":"+628123456789"}'
-```
-
 ## Tech Stack
 
-| Component | Technology |
-|-----------|-----------|
-| API | FastAPI 0.109 |
-| Task Queue | Celery 5.3 + Redis 7 |
-| Validation | Pydantic + pydantic-settings |
-| Odoo API | XML-RPC |
-| Container | Docker Compose |
+| Layer | Technology |
+|-------|-----------|
+| Ingestion | FastAPI 0.109 |
+| Queue / Buffer | Celery 5.3 + Redis 7 |
+| Validation | Pydantic v2 + pydantic-settings |
+| Load | Odoo XML-RPC API |
+| Containerization | Docker Compose |
 | Runtime | Python 3.10 |
 
 ## License
