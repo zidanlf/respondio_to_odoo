@@ -46,6 +46,9 @@ def sync_contact_to_odoo(self, contact_dict: dict) -> dict:
 
     Retries automatically on transient network / timeout errors.
     """
+    # Pop extra fields injected by the webhook handler
+    funnel_stage = contact_dict.pop("funnel_stage", None)
+
     try:
         contact = RespondioContact(**contact_dict)
     except Exception as exc:
@@ -68,9 +71,12 @@ def sync_contact_to_odoo(self, contact_dict: dict) -> dict:
             respondio_id=contact.id,
             name=name,
             phone=phone,
+            email=contact.email,
+            funnel_stage=funnel_stage,
         )
         return {"status": "ok", "partner_id": partner_id}
 
     except OdooAuthError as exc:
         logger.error("Auth error — will not retry: %s", exc)
         return {"status": "auth_error", "detail": str(exc)}
+

@@ -20,6 +20,8 @@ class RespondioContact(BaseModel):
     lastName: Optional[str] = None
     phoneNumber: Optional[str] = None
     phone: Optional[str] = None  # Added: Respond.io sometimes uses 'phone' instead of 'phoneNumber'
+    email: Optional[str] = None
+    tags: Optional[list[str]] = None
 
     def get_phone(self) -> Optional[str]:
         """Return phoneNumber if present, otherwise phone."""
@@ -38,6 +40,7 @@ class WebhookPayload(BaseModel):
       - Flat:   {"id": "...", "firstName": "...", ...}
       - Nested: {"data": {"contact": {"id": "...", ...}}}
       - Root:   {"contact": {"id": "...", ...}} (from Respond.io sample)
+      - Tag:    {"contact": {..., "tags": [...]}, "tag": "...", "action": "...", "event_type": "contact.tag.updated"}
     """
 
     # Flat fields
@@ -49,7 +52,12 @@ class WebhookPayload(BaseModel):
 
     # Nested wrappers
     data: Optional[WebhookData] = None
-    contact: Optional[RespondioContact] = None # Added: handle sample structure
+    contact: Optional[RespondioContact] = None  # handle sample structure
+
+    # Tag-update event fields
+    tag: Optional[str] = None
+    action: Optional[str] = None
+    event_type: Optional[str] = None
 
     def extract_contact(self) -> RespondioContact:
         """Resolve the actual contact regardless of payload shape."""

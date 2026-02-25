@@ -17,6 +17,8 @@ class OdooClient:
     """Thin wrapper around Odoo's XML-RPC API."""
 
     RESPONDIO_FIELD = "x_studio_respondio_id"
+    FUNNEL_STAGE_FIELD = "x_studio_conversion_funnel_stage_1"
+    LEAD_CHANNEL_MODEL = "x_lead_channel"
 
     def __init__(self) -> None:
         settings = get_settings()
@@ -59,28 +61,57 @@ class OdooClient:
         return xmlrpc.client.ServerProxy(f"{self._url}/xmlrpc/2/object")
 
     # ------------------------------------------------------------------
-    # Core CRUD helpers
+    # Core CRUD helpers (generic — accept any model)
     # ------------------------------------------------------------------
-    def _search(self, domain: list) -> list[int]:
+    def _search(self, model: str, domain: list) -> list[int]:
         uid = self._authenticate()
         return self._models().execute_kw(
             self._db, uid, self._api_key,
-            "res.partner", "search", [domain],
+            model, "search", [domain],
         )
 
-    def _create(self, vals: dict) -> int:
+    def _create(self, model: str, vals: dict) -> int:
         uid = self._authenticate()
         return self._models().execute_kw(
             self._db, uid, self._api_key,
-            "res.partner", "create", [vals],
+            model, "create", [vals],
         )
 
-    def _write(self, partner_id: int, vals: dict) -> bool:
+    def _write(self, model: str, record_id: int, vals: dict) -> bool:
         uid = self._authenticate()
         return self._models().execute_kw(
             self._db, uid, self._api_key,
-            "res.partner", "write", [[partner_id], vals],
+            model, "write", [[record_id], vals],
         )
+
+    # ------------------------------------------------------------------
+    # Many2one helpers
+    # ------------------------------------------------------------------
+    def _resolve_many2one(
+        self, model: str, value: str, name_field: str = "name",
+    ) -> Optional[int]:
+        """
+        Search for a record by its name/label field in the given model.
+        Returns the record ID if found, otherwise None.
+        """
+        try:
+            ids = self._search(model, [[name_field, "=", value]])
+            if ids:
+                logger.info(
+                    "Resolved '%s' in %s.%s → ID %s",
+                    value, model, name_field, ids[0],
+                )
+                return ids[0]
+            logger.warning(
+                "No record with %s='%s' found in %s",
+                name_field, value, model,
+            )
+        except xmlrpc.client.Fault as exc:
+            logger.error(
+                "Failed to search %s for %s='%s': %s",
+                model, name_field, value, exc,
+            )
+        return None
 
     # ------------------------------------------------------------------
     # Public API
@@ -90,6 +121,8 @@ class OdooClient:
         respondio_id: str,
         name: str,
         phone: Optional[str] = None,
+        email: Optional[str] = None,
+        funnel_stage: Optional[str] = None,
     ) -> int:
         """
         Idempotent upsert: search by x_studio_respondio_id, then update or
@@ -98,7 +131,7 @@ class OdooClient:
         domain = [[self.RESPONDIO_FIELD, "=", respondio_id]]
 
         try:
-            partner_ids = self._search(domain)
+            partner_ids = self._search("res.partner", domain)
         except xmlrpc.client.Fault as exc:
             logger.error(
                 "Odoo search failed (field '%s' may not exist): %s",
@@ -112,11 +145,27 @@ class OdooClient:
         }
         if phone:
             vals["phone"] = phone
+        if email:
+            vals["email"] = email
+
+        # Resolve Many2one: look up Lead Channel ID by x_name
+        if funnel_stage:
+            channel_id = self._resolve_many2one(
+                self.LEAD_CHANNEL_MODEL, funnel_stage,
+                name_field="x_name",
+            )
+            if channel_id:
+                vals[self.FUNNEL_STAGE_FIELD] = channel_id
+            else:
+                logger.warning(
+                    "Skipping funnel_stage '%s' — not found in %s",
+                    funnel_stage, self.LEAD_CHANNEL_MODEL,
+                )
 
         if partner_ids:
             partner_id = partner_ids[0]
             try:
-                self._write(partner_id, vals)
+                self._write("res.partner", partner_id, vals)
                 logger.info(
                     "Updated Partner %s for Respond.io ID %s",
                     partner_id, respondio_id,
@@ -128,7 +177,7 @@ class OdooClient:
 
         # Create new
         try:
-            partner_id = self._create(vals)
+            partner_id = self._create("res.partner", vals)
             logger.info(
                 "Created Partner %s for Respond.io ID %s",
                 partner_id, respondio_id,
@@ -138,3 +187,5 @@ class OdooClient:
             raise
 
         return partner_id
+
+
